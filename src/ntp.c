@@ -246,6 +246,44 @@ static void reset_timeout(struct ntp_data *nd)
 	nd->retries = 0;
 }
 
+static void notify_systemd_time_wait_sync(void)
+{
+	const char* const run_systemd = "/run/systemd";
+	gchar *pathname;
+	GError *error = NULL;
+
+	if (!g_file_test(run_systemd, G_FILE_TEST_IS_DIR)) {
+		return;
+	}
+
+	pathname = g_strdup_printf("%s/%s", run_systemd, "timesync");
+	if (!pathname) {
+		return;
+	}
+
+	mode_t old_umask = umask(022);
+
+	if (!g_file_test(pathname, G_FILE_TEST_IS_DIR)
+	    && (g_mkdir(pathname, 0775) < 0)
+	    && (errno != EEXIST)) {
+		goto out;
+	}
+
+	g_free(pathname);
+	pathname = g_strdup_printf("%s/%s", run_systemd,
+				   "timesync/synchronized");
+	if (pathname
+	    && !g_file_set_contents(pathname, pathname, 0, &error)) {
+		g_error_free(error);
+	}
+
+ out:
+	if (pathname) {
+		g_free(pathname);
+	}
+	umask(old_umask);
+}
+
 static void decode_msg(struct ntp_data *nd, void *base, size_t len,
 		struct timeval *tv, struct timespec *mrx_time)
 {
@@ -384,6 +422,8 @@ static void decode_msg(struct ntp_data *nd, void *base, size_t len,
 		nd->cb(false, nd->user_data);
 		return;
 	}
+
+	notify_systemd_time_wait_sync();
 
 	DBG("interval/delta/delay/drift %fs/%+.3fs/%.3fs/%+ldppm",
 		LOGTOD(msg->poll), offset, delay, tmx.freq / 65536);
